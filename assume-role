@@ -1,0 +1,49 @@
+#!/bin/bash
+
+PACKAGES_NEEDED=('aws' 'jq')
+for i in "${PACKAGES_NEEDED[@]}"; do
+  if [ -z `which "${i}"` ]; then
+    echo "Can't find "${i}" binary"
+    exit 1
+  fi
+done
+
+(return 0 2>/dev/null) && sourced=1 || sourced=0
+
+if [ "$#" -eq "0" ]; then
+  echo -e "\e[1;36mYou have to pass the profile name as the first argument of the script\e[0m\n"
+  echo -e "You may want to source the script using this command \e[0;32m'. ${BASH_SOURCE[0]}'\e[0m"
+  echo
+  echo "If you source the script, secrets will be exported directly to your current shell"
+  echo "If you don't source the script, it will print out the secrets to the stdout"
+  [[ $sourced == 0 ]] && exit 1 || return
+fi
+
+source <(grep = <(grep -EA 5 "\[profile $1\]" $HOME/.aws/config | sed 's/ *= */=/g'))
+
+profile=${1}
+echo "Profile $profile with ARN $role_arn  will be used"
+echo -n "Insert 6 digit number from your MFA device: "; read mfa_token
+
+echo "Getting login informations from the root account..."
+default_login_list=($(aws --profile default sts get-session-token --serial-number ${mfa_serial} --token-code $mfa_token | jq '.Credentials .AccessKeyId, .Credentials .SecretAccessKey, .Credentials .SessionToken' | sed 's/"\(.*\)"$/\1/'))
+
+export AWS_ACCESS_KEY_ID=${default_login_list[0]}
+export AWS_SECRET_ACCESS_KEY=${default_login_list[1]}
+export AWS_SESSION_TOKEN=${default_login_list[2]}
+
+assume_list=($(aws sts assume-role --role-arn ${role_arn} --role-session-name ansible | jq '.Credentials .AccessKeyId, .Credentials .SecretAccessKey, .Credentials .SessionToken' | sed 's/"\(.*\)"$/\1/'))
+
+if [ "${sourced}" -eq "1" ]; then
+  echo -e "\n\e[1;36mVars have been exported to your environment (check 'env' command)\e[0m\n"
+  export AWS_ACCESS_KEY_ID=${assume_list[0]}
+  export AWS_SECRET_ACCESS_KEY=${assume_list[1]}
+  export AWS_SESSION_TOKEN=${assume_list[2]}
+else
+  echo -e "\n\e[1;36mGot these informations for assumed role:\e[0m\n"
+  echo -e "\e[0;32mexport AWS_ACCESS_KEY_ID=${assume_list[0]}"
+  echo "export AWS_SECRET_ACCESS_KEY=${assume_list[1]}"
+  echo -e "export AWS_SESSION_TOKEN=${assume_list[2]}\e[0m"
+  echo -e "\nYou may want to source the script to export the vars directly to your environment\n"
+  echo -e "To source it, use this syntax '. .${0}'"
+fi
